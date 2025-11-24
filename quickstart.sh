@@ -1,5 +1,6 @@
 #!/bin/bash
 
+KUBE_PASSWORD="root123"
 
 function isRoot() {
 	if [ "${EUID}" -ne 0 ]; then
@@ -41,6 +42,8 @@ deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe mult
 deb http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
 deb http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
 EOF
+    sudo mv /etc/apt/sources.list.d/ubuntu.sources \
+        /etc/apt/sources.list.d/ubuntu.sources.disabled
     sudo apt update
     # to Undo run with --Undo
 }
@@ -50,14 +53,17 @@ function createImages() {
     local ip=10.44.44.$2
     local mac=00:16:3e:44:44:$2
 
-    xen-create-image \
-    --hostname=$hostname --memory=2gb --vcpus=2 \
-    --dir=/var/lib/xen/images --ip=$ip --mac=$mac \
-    --pygrub --dist=bullseye --noswap --noaccounts \
-    --noboot --nocopyhosts --extension=.pv \
-    --fs=ext4 --genpass=0 --passwd --nohosts \
-    --bridge=xenlan44 --gateway=10.44.44.1 --netmask=255.255.255.0
-    }
+    if ! -f /etc/xen/$hostname.pv; then
+        xen-create-image \
+        --hostname=$hostname --memory=2gb --vcpus=2 \
+        --dir=/var/lib/xen/images --ip=$ip --mac=$mac \
+        --pygrub --dist=bullseye --noswap --noaccounts \
+        --noboot --nocopyhosts --extension=.pv \
+        --fs=ext4 --genpass=0 --password=$KUBE_PASSWORD --nohosts \
+        --bridge=xenlan44 --gateway=10.44.44.1 --netmask=255.255.255.0
+    fi
+}
+
 function createSomeImages() {
     createImages "master01" 11
     createImages "master02" 12
@@ -66,6 +72,62 @@ function createSomeImages() {
     createImages "worker02" 15
 }
 
-isRoot
-checkXen
-createSomeImages 
+function addLocaltime() {
+    local hostname=$1
+
+    echo "localtime = 1" | sudo tee /etc/xen/$hostname.pv >/dev/null
+}
+
+function addSomeLocaltime() {
+    addLocaltime "master01" 
+    addLocaltime "master02" 
+    addLocaltime "master03" 
+    addLocaltime "worker01" 
+    addLocaltime "worker02" 
+}
+
+function getUbuntuVm(){
+    # add git exist check
+    [ ! -d kvm-on-machine ] && git clone https://github.com/Tsuyakashi/kvm-on-machine.git
+    cd kvm-on-machine
+    chmod +x ./quickstart.sh
+    sudo ./quickstart.sh --ubuntu --full
+
+    cd ..
+}
+
+
+VM_NAME=ubuntu-noble
+
+function connectWithSSH() {
+    if ! virsh domifaddr $VM_NAME | grep "ipv4" &>/dev/null; then
+        echo "vm did not start"
+        exit
+    fi 
+    VM_IP=$(virsh domifaddr $VM_NAME | awk '/ipv4/ { split($4, a, "/"); print a[1] }')
+    chmod 600 kvm-on-machine/keys/rsa.key
+    scp -i kvm-on-machine/keys/rsa.key \
+        -o StrictHostKeyChecking=accept-new \
+        ./quickstart.sh \
+        ubuntu@$VM_IP:~/ 
+    ssh -t -i kvm-on-machine/keys/rsa.key \
+        -o StrictHostKeyChecking=accept-new \
+        ubuntu@$VM_IP \
+        "IS_VM=1 sudo -E ./quickstart.sh" 
+    
+}
+
+if [[ "$IS_VM" == "1" ]]; then
+    isRoot
+    fixClassicAptList
+    checkXen
+    createSomeImages
+else
+    isRoot
+
+    if ! virsh list | grep "$VM_NAME" &>/dev/null; then
+        getUbuntuVm
+    fi
+    
+    connectWithSSH
+fi
