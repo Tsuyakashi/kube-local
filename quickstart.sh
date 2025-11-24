@@ -103,8 +103,15 @@ function connectWithSSH() {
     if ! virsh domifaddr $VM_NAME | grep "ipv4" &>/dev/null; then
         echo "vm did not start"
         exit
+    else
+        VM_IP=$(virsh domifaddr $VM_NAME | awk '/ipv4/ { split($4, a, "/"); print a[1] }')
+        while ! nc -z $VM_IP 22; do
+            sleep 5
+            echo "did not accesible yet"
+        done
     fi 
-    VM_IP=$(virsh domifaddr $VM_NAME | awk '/ipv4/ { split($4, a, "/"); print a[1] }')
+
+    
     chmod 600 kvm-on-machine/keys/rsa.key
     scp -i kvm-on-machine/keys/rsa.key \
         -o StrictHostKeyChecking=accept-new \
