@@ -74,7 +74,22 @@ function checkXen () {
         sudo apt install -y xen-hypervisor &>/dev/null
         echo "xen-hypervisor installed."
     fi
- }
+}
+
+function skelSshConfig {
+    if [ ! -f /etc/xen-tools/skel/authorized_keys ]; then
+        mkdir -p /etc/xen-tools/skel/root/.ssh
+        cp /root/.ssh/authorized_keys /etc/xen-tools/skel
+    else
+        echo "authorized_keys already exists"
+    fi
+    if [ ! -f /etc/xen-tools/skel/etc/ssh/sshd_config ]; then
+        mkdir -p /etc/xen-tools/skel/etc/ssh
+        cp /etc/ssh/sshd_config /etc/xen-tools/skel/etc/ssh
+    else 
+        echo "sshd_config already exists"
+    fi
+}
 
 function createImages() {
     local hostname=$1
@@ -123,8 +138,11 @@ function addSomeLocaltime() {
     addLocaltime "worker02" 
 }
 
-
-
+function etcdCreate() {
+    xl create /etc/xen/master01.pv
+    xl create /etc/xen/master02.pv
+    xl create /etc/xen/master03.pv
+}
 
 function connectWithSSH() {
     if ! virsh domifaddr $VM_NAME | grep "ipv4" &>/dev/null; then
@@ -143,7 +161,13 @@ function connectWithSSH() {
     scp -i ./keys/rsa.key \
         -o StrictHostKeyChecking=accept-new \
         ./quickstart.sh \
+        ubuntu@$VM_IP:~/
+
+    scp -i ./keys/rsa.key \
+        -o StrictHostKeyChecking=accept-new \
+        ./variables.sh \
         ubuntu@$VM_IP:~/ 
+
     ssh -t -i ./keys/rsa.key \
         -o StrictHostKeyChecking=accept-new \
         ubuntu@$VM_IP \
@@ -156,8 +180,10 @@ if [[ "$IS_VM" == "1" ]]; then
     diskConfigure
     fixClassicAptList
     checkXen
+    skelSshConfig
     createSomeImages
     addSomeLocaltime
+    etcdCreate
 else 
     isRoot
     getUbuntuVm
